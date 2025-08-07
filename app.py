@@ -1,42 +1,46 @@
 import streamlit as st
-from playwright.sync_api import sync_playwright
+import requests
+import pandas as pd
 
-def scrape_indeed_with_playwright(query="Data Analyst", location="Remote", max_results=30):
+# --- Page Setup ---
+st.set_page_config(page_title="Findwork Job Board", layout="wide")
+st.title("💼 Tech Job Board (via Findwork API)")
+
+# --- Sidebar Filters ---
+st.sidebar.header("Search Filters")
+search_query = st.sidebar.text_input("Keyword", value="data")
+location = st.sidebar.text_input("Location (optional)", value="")
+limit = st.sidebar.slider("Max Results", min_value=10, max_value=50, step=10)
+
+# --- API Call ---
+def fetch_jobs(query, location, limit):
+    url = "https://findwork.dev/api/jobs/"
+    params = {"search": query}
+    response = requests.get(url, params=params)
+    data = response.json()
+
     jobs = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        url = f"https://www.indeed.com/jobs?q={query}&l={location}"
-        st.write(f"Visiting: {url}")
-        try:
-            page.goto(url, timeout=60000)
-            page.wait_for_selector(".job_seen_beacon", timeout=15000)
+    for job in data.get("results", [])[:limit]:
+        if location and location.lower() not in job["location"].lower():
+            continue
+        jobs.append({
+            "Title": job["role"],
+            "Company": job["company_name"],
+            "Location": job["location"],
+            "Date Posted": job["date_posted"],
+            "Job Type": job["employment_type"],
+            "Remote": job["remote"],
+            "Link": job["url"]
+        })
 
-            job_cards = page.locator(".job_seen_beacon")
-            count = job_cards.count()
+    return pd.DataFrame(jobs)
 
-            for i in range(min(count, max_results)):
-                card = job_cards.nth(i)
-                try:
-                    title = card.locator("h2.jobTitle").inner_text(timeout=5000)
-                    company = card.locator(".companyName").inner_text(timeout=5000)
-                    loc = card.locator(".companyLocation").inner_text(timeout=5000)
-                    link = card.locator("a").get_attribute("href")
-                    full_link = f"https://www.indeed.com{link}" if link else "#"
-
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": loc,
-                        "link": full_link,
-                        "source": "Indeed"
-                    })
-                except Exception as card_err:
-                    st.warning(f"Job skipped due to: {card_err}")
-                    continue
-        except Exception as page_err:
-            st.error("Failed to load or parse the page:")
-            st.code(traceback.format_exc())
-        finally:
-            browser.close()
-    return jobs
+# --- Main App ---
+if st.button("🔍 Search Jobs"):
+    with st.spinner("Fetching jobs..."):
+        df = fetch_jobs(search_query, location, limit)
+        if not df.empty:
+            st.success(f"Found {len(df)} jobs!")
+            st.dataframe(df)
+        else:
+            st.warning("No jobs found. Try a broader keyword or remove location filter.")
