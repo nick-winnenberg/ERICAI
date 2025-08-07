@@ -1,95 +1,42 @@
-import time
-import requests
-from bs4 import BeautifulSoup
 import streamlit as st
+from playwright.sync_api import sync_playwright
 
-# Sidebar UI
-st.sidebar.markdown("### Filters")
-query = st.sidebar.text_input("Job Title", "Data Analyst")
-location = st.sidebar.text_input("Location", "Remote")
-max_results = st.sidebar.slider("Max Results", 10, 100, 30)
-source_filter = st.sidebar.multiselect("Source", ["Indeed"], default=["Indeed"])
-
-# Function to scrape jobs from Indeed
-def scrape_indeed_jobs(query, location, max_results=30):
+def scrape_indeed_with_playwright(query="Data Analyst", location="Remote", max_results=30):
     jobs = []
-    headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Referer": "https://www.indeed.com/",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1"
-    }   
-    base_url = "https://www.indeed.com/jobs"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        url = f"https://www.indeed.com/jobs?q={query}&l={location}"
+        st.write(f"Visiting: {url}")
+        try:
+            page.goto(url, timeout=60000)
+            page.wait_for_selector(".job_seen_beacon", timeout=15000)
 
-    for start in range(0, max_results, 10):
-        params = {"q": query, "l": location, "start": start}
-        response = requests.get(base_url, params=params, headers=headers)
+            job_cards = page.locator(".job_seen_beacon")
+            count = job_cards.count()
 
-        if response.status_code != 200:
-            st.error(f"Request failed with status code {response.status_code}")
-            break
+            for i in range(min(count, max_results)):
+                card = job_cards.nth(i)
+                try:
+                    title = card.locator("h2.jobTitle").inner_text(timeout=5000)
+                    company = card.locator(".companyName").inner_text(timeout=5000)
+                    loc = card.locator(".companyLocation").inner_text(timeout=5000)
+                    link = card.locator("a").get_attribute("href")
+                    full_link = f"https://www.indeed.com{link}" if link else "#"
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        job_cards = soup.select(".job_seen_beacon")
-
-        for card in job_cards:
-            try:
-                title_elem = card.select_one("h2.jobTitle")
-                company_elem = card.select_one(".companyName")
-                location_elem = card.select_one(".companyLocation")
-                link_elem = card.select_one("a")
-
-                title = title_elem.text.strip() if title_elem else "N/A"
-                company = company_elem.text.strip() if company_elem else "N/A"
-                loc = location_elem.text.strip() if location_elem else "N/A"
-                link = "https://www.indeed.com" + link_elem["href"] if link_elem else "#"
-
-                jobs.append({
-                    "title": title,
-                    "company": company,
-                    "location": loc,
-                    "link": link,
-                    "source": "Indeed"
-                })
-            except Exception as e:
-                continue  # Optionally: log the error with st.warning(str(e))
-
-            if len(jobs) >= max_results:
-                break
-
-        if len(jobs) >= max_results:
-            break
-
-        time.sleep(1)  # Be polite and avoid being blocked
-
-        st.code(soup.prettify()[:2000], language="html")
-
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": loc,
+                        "link": full_link,
+                        "source": "Indeed"
+                    })
+                except Exception as card_err:
+                    st.warning(f"Job skipped due to: {card_err}")
+                    continue
+        except Exception as page_err:
+            st.error("Failed to load or parse the page:")
+            st.code(traceback.format_exc())
+        finally:
+            browser.close()
     return jobs
-
-# Cache the scraper for performance
-@st.cache_data(ttl=600)
-def get_indeed_jobs(query, location, max_results):
-    return scrape_indeed_jobs(query, location, max_results)
-
-# Main interface
-if st.button("Search"):
-    with st.spinner("Scraping jobs from Indeed..."):
-        all_jobs = []
-
-        if "Indeed" in source_filter:
-            indeed_jobs = get_indeed_jobs(query, location, max_results)
-            all_jobs.extend(indeed_jobs)
-
-        if not all_jobs:
-            st.warning("No jobs found. Try adjusting your filters.")
-        else:
-            for job in all_jobs:
-                st.markdown(f"### [{job['title']}]({job['link']})")
-                st.write(f"**Company:** {job['company']}")
-                st.write(f"**Location:** {job['location']}")
-                st.write(f"**Source:** {job['source']}")
-                st.markdown("---")
