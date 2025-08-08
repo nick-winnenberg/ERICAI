@@ -2,45 +2,46 @@ import streamlit as st
 import requests
 import pandas as pd
 
-# --- Page Setup ---
-st.set_page_config(page_title="Findwork Job Board", layout="wide")
-st.title("💼 Tech Job Board (via Findwork API)")
+st.title("EricAI API Job Search")
 
-# --- Sidebar Filters ---
-st.sidebar.header("Search Filters")
-search_query = st.sidebar.text_input("Keyword", value="data")
-location = st.sidebar.text_input("Location (optional)", value="")
-limit = st.sidebar.slider("Max Results", min_value=10, max_value=50, step=10)
+query = st.text_input("Job Title or Keywords", "Warehouse")
+location = st.text_input("Location", "Ontario")
+num_jobs = 100
 
-# --- API Call ---
-def fetch_jobs(query, location, limit):
-    url = "https://findwork.dev/api/jobs/"
-    params = {"search": query}
-    response = requests.get(url, params=params)
-    data = response.json()
+def get_jobs_adzuna(query, location, num_jobs):
+    url = f"https://api.adzuna.com/v1/api/jobs/us/search/1"
+    params = {
+        "app_id": "26c021e8",
+        "app_key": "0e5d4222db5fef93f52db6fba6a16c6d",
+        "results_per_page": num_jobs,
+        "what": query,
+        "where": location,
+        "content-type": "application/json"
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        jobs = []
+        for job in data.get("results", []):
+            jobs.append({
+                "Title": job.get("title", ""),
+                "Company": job.get("company", {}).get("display_name", ""),
+                "Location": job.get("location", {}).get("display_name", ""),
+                "Summary": job.get("description", "")[:200] + "..." if job.get("description") else "",
+                "URL": job.get("redirect_url", ""),
+                "Date Posted": job.get("created", "")
+            })
+        return jobs
+    except Exception as e:
+        st.error(f"API request failed: {e}")
+        return []
 
-    jobs = []
-    for job in data.get("results", [])[:limit]:
-        if location and location.lower() not in job["location"].lower():
-            continue
-        jobs.append({
-            "Title": job["role"],
-            "Company": job["company_name"],
-            "Location": job["location"],
-            "Date Posted": job["date_posted"],
-            "Job Type": job["employment_type"],
-            "Remote": job["remote"],
-            "Link": job["url"]
-        })
-
-    return pd.DataFrame(jobs)
-
-# --- Main App ---
-if st.button("🔍 Search Jobs"):
-    with st.spinner("Fetching jobs..."):
-        df = fetch_jobs(search_query, location, limit)
-        if not df.empty:
-            st.success(f"Found {len(df)} jobs!")
+if st.button("Search Jobs"):
+    with st.spinner("Searching jobs..."):
+        jobs = get_jobs_adzuna(query, location, num_jobs)
+        if jobs:
+            df = pd.DataFrame(jobs)
             st.dataframe(df)
         else:
-            st.warning("No jobs found. Try a broader keyword or remove location filter.")
+            st.warning("No jobs found or API request failed.")
