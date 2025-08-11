@@ -1,5 +1,5 @@
 bs4
 streamlit
 requests_html
-
+googlesearch-python
 
